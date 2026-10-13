@@ -222,3 +222,13 @@ Antigravity 2.x 的「**新增 MCP 伺服器 (Add MCP Server)**」市場目錄�
 ## 🤝 致謝
 - 感謝所有參與測試與回饋的貢獻者！
 - 特別鳴謝 **[yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)** 提供優秀的 Windows 免 TUN 強制代理注入方案。
+
+## 自動重試與 macOS 更新
+
+安裝漢化會啟用自動重試，僅識別附近明確錯誤提示中的 `Retry`、`Try Again`、簡體或繁體「重試」按鈕；不會自動點擊 `Resume` /「恢復」。點擊前會重新確認按鈕、可用狀態及錯誤提示。沒有可識別錯誤提示時，請手動重試。
+
+macOS 優先使用官方更新器。只有目前應用是 Ad-hoc 簽章，且已下載更新實際觸發 Squirrel 簽章驗證錯誤時，才允許備用安裝。備用流程先解壓新應用，驗證 Google Developer ID（`EQHXZ8M8AV`）、應用識別碼及版本，再退出並替換。驗證或權限檢查失敗時，用戶端保持執行。
+
+舊應用保存在應用目錄旁的 `.antigravity-update-*/previous.app`，下載 ZIP 也會保留。替換失敗會嘗試復原；即使復原失敗，舊應用仍保留在備份目錄，可手動恢復。日誌位於同目錄的 `installer.log`。確認新版本可用後，可手動清理備份。更新會恢復官方英文介面，請重新執行漢化腳本。
+
+開發驗證：`node --test scripts/tests/safety.test.js` 與 `node scripts/compare_dicts.js`。不相容的更新程式碼會明確報錯並停止安裝。
