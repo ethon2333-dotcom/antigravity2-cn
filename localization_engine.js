@@ -777,102 +777,7 @@ function cleanJsContent(content) {
     return content.replace(retryRegex, "").replace(regex, "");
 }
 
-const AUTO_RETRY_CODE = `/* === ANTIGRAVITY 2.0 AUTO-RETRY INJECTION === */
-(function() {
-  const CONFIG = {
-    checkIntervalMs: 2000,
-    retryDelayMs: 3000,
-    cooldownMs: 5000,
-  };
-
-  let retryCount = 0;
-  let isProcessing = false;
-  let lastRetryTime = 0;
-
-  function log(msg, color = '#34A853') {
-    console.log('%c[Auto-Retry 2.0] ' + msg, 'color: ' + color + '; font-weight: bold;');
-  }
-
-  function isVisible(el) {
-    if (!el) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-
-  function findRetryButton() {
-    const candidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], div[class*="retry" i], span[class*="retry" i]'));
-    
-    for (const el of candidates) {
-      if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
-      if (!isVisible(el)) continue;
-
-      const text = (el.innerText || el.textContent || '').trim().toLowerCase();
-      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-      const title = (el.getAttribute('title') || '').toLowerCase();
-
-      if (text.includes('cancel') || text.includes('取消') || text.includes('abort') || text.includes('stop')) {
-        continue;
-      }
-
-      const isMatch =
-        text === 'retry' ||
-        text === '重试' ||
-        text === 'try again' ||
-        text === '再试一次' ||
-        text === 'resume' ||
-        text === '恢复' ||
-        aria === 'retry' ||
-        aria === '重试' ||
-        title === 'retry' ||
-        title === '重试' ||
-        (text.length < 20 && (text.includes('retry') || text.includes('重试')));
-
-      if (isMatch) {
-        return el;
-      }
-    }
-    return null;
-  }
-
-  function setupObserver() {
-    log('自动重试守护进程已激活 (无限重试模式 - 无熔断)');
-
-    setInterval(() => {
-      const now = Date.now();
-      if (isProcessing || (now - lastRetryTime < CONFIG.cooldownMs)) return;
-
-      const btn = findRetryButton();
-      if (btn) {
-        isProcessing = true;
-        log('捕获到重试按钮，将在 ' + (CONFIG.retryDelayMs / 1000) + ' 秒后自动触发 (累计第 ' + (retryCount + 1) + ' 次)...', '#FBBC05');
-
-        setTimeout(() => {
-          try {
-            if (isVisible(btn)) {
-              btn.click();
-              retryCount++;
-              lastRetryTime = Date.now();
-              log('已成功触发第 ' + retryCount + ' 次重试！', '#34A853');
-            }
-          } catch (err) {
-            console.error('[Auto-Retry] 点击出错:', err);
-          } finally {
-            isProcessing = false;
-          }
-        }, CONFIG.retryDelayMs);
-      }
-    }, CONFIG.checkIntervalMs);
-  }
-
-  if (document.readyState === 'loading') {
-    window.addEventListener('DOMContentLoaded', setupObserver);
-  } else {
-    setupObserver();
-  }
-})();
-/* === END ANTIGRAVITY 2.0 AUTO-RETRY INJECTION === */`;
+const AUTO_RETRY_CODE = fs.readFileSync(path.join(__dirname, 'scripts', 'auto_retry.js'), 'utf8');
 
 function cleanMenuJsContent(content) {
     const startMark = "// ==========================================";
@@ -1140,10 +1045,14 @@ function install20(resourcesDir) {
 
     // 1. 备份与官方更新检测
     let isAlreadyLocalized = false;
+    let asarBeforeInstall;
     try {
-        const asarBuffer = fs.readFileSync(asarPath);
-        isAlreadyLocalized = asarBuffer.indexOf(Buffer.from(SIGNATURE_START, "utf8")) !== -1;
-    } catch (e) {}
+        asarBeforeInstall = fs.readFileSync(asarPath);
+        isAlreadyLocalized = asarBeforeInstall.indexOf(Buffer.from(SIGNATURE_START, "utf8")) !== -1;
+    } catch (err) {
+        console.error('[错误] 无法读取当前 app.asar: ' + err.message);
+        return false;
+    }
 
     if (!isAlreadyLocalized) {
         console.log(`[备份] 检测到全新官方英文版本，正在同步创建/更新官方备份包: ${bakPath} ...`);
@@ -1412,168 +1321,23 @@ function install20(resourcesDir) {
         console.log(`[修改] 加载页汉化注入成功！`);
     }
 
-    // 3.4 注入 updater.js (更新弹窗汉化与 macOS Ad-hoc 签名更新修复)
+    // 3.4 注入更新汉化及仅限 Ad-hoc 签名错误的安全备用安装器。
     const updaterPath = path.join(tempDir, "dist", "updater.js");
     if (fs.existsSync(updaterPath)) {
-        console.log(`[修改] 正在向 updater.js 注入更新弹窗汉化与 macOS 更新修复...`);
-        let updaterContent = fs.readFileSync(updaterPath, 'utf-8');
-        
-        // 1. 汉化更新菜单状态枚举并兼容中英文点击动作映射
-        const targetMenuActions = `exports.updateActions = {
-    [MenuUpdateStep.CheckForUpdates]: () => checkForUpdates(true),
-    [MenuUpdateStep.CheckingForUpdates]: undefined,
-    [MenuUpdateStep.DownloadingUpdate]: undefined,
-    [MenuUpdateStep.RestartToUpdate]: () => quitAndInstall(),
-};`;
-        const replacementMenuActions = `exports.updateActions = {
-    [MenuUpdateStep.CheckForUpdates]: () => checkForUpdates(true),
-    [MenuUpdateStep.CheckingForUpdates]: undefined,
-    [MenuUpdateStep.DownloadingUpdate]: undefined,
-    [MenuUpdateStep.RestartToUpdate]: () => quitAndInstall(),
-    'Check for Updates': () => checkForUpdates(true),
-    'Restart to Update': () => quitAndInstall(),
-    '检查更新': () => checkForUpdates(true),
-    '檢查更新': () => checkForUpdates(true),
-    '重启以更新': () => quitAndInstall(),
-    '重啟以更新': () => quitAndInstall(),
-};`;
-        updaterContent = updaterContent.replace(targetMenuActions, replacementMenuActions);
-
-        // 2. 替换 Check for Updates 弹窗的属性
-        const targetOptions = `                title: 'Check for Updates',
-                message: 'No updates available',
-                buttons: ['OK'],`;
-        const replacementOptions = USE_TW
-            ? `                title: '檢查更新',
-                message: '目前沒有可用的更新',
-                buttons: ['好'],`
-            : `                title: '检查更新',
-                message: '暂无可用更新',
-                buttons: ['确定'],`;
-        
-        updaterContent = updaterContent.replace(targetOptions, replacementOptions);
-
-        // 3. 修复 macOS 本地 Ad-hoc 签名下 Squirrel.Mac 签名校验报错导致顶部更新按钮消失及无法点击更新的问题
-        const targetAutoInstall = `    electron_updater_1.autoUpdater.autoDownload = true;
-    electron_updater_1.autoUpdater.autoInstallOnAppQuit = electron_1.app.isPackaged;`;
-        const replacementAutoInstall = `    electron_updater_1.autoUpdater.autoDownload = true;
-    electron_updater_1.autoUpdater.autoInstallOnAppQuit = process.platform === 'darwin' ? false : electron_1.app.isPackaged;
-    let macDownloadedInfo = null;
-    const origQuitAndInstall = electron_updater_1.autoUpdater.quitAndInstall.bind(electron_updater_1.autoUpdater);
-    electron_updater_1.autoUpdater.quitAndInstall = (...args) => {
-        if (process.platform === 'darwin' && !electron_updater_1.autoUpdater.squirrelDownloadedUpdate) {
-            const fs = require('fs');
-            const os = require('os');
-            const zipPath = (macDownloadedInfo && macDownloadedInfo.downloadedFile && fs.existsSync(macDownloadedInfo.downloadedFile))
-                ? macDownloadedInfo.downloadedFile
-                : path.join(os.homedir(), 'Library', 'Caches', 'com.google.antigravity', 'pending', 'Antigravity.zip');
-            if (fs.existsSync(zipPath)) {
-                console.log('[AutoUpdater] Ad-hoc macOS build: installing update from ' + zipPath);
-                const currentPid = process.pid;
-                const appBundlePath = path.resolve(process.execPath, '../../..');
-                const stageDir = path.join(os.tmpdir(), 'antigravity-update-' + Date.now());
-                const script = \`
-                    while kill -0 \${currentPid} 2>/dev/null; do sleep 0.5; done
-                    mkdir -p "\${stageDir}"
-                    if /usr/bin/ditto -x -k "\${zipPath}" "\${stageDir}"; then
-                        if [ -d "\${stageDir}/Antigravity.app" ]; then
-                            rm -rf "\${appBundlePath}"
-                            mv "\${stageDir}/Antigravity.app" "\${appBundlePath}"
-                            xattr -cr "\${appBundlePath}" 2>/dev/null || true
-                            rm -f "\${zipPath}" 2>/dev/null || true
-                        fi
-                    fi
-                    rm -rf "\${stageDir}" 2>/dev/null || true
-                    open "\${appBundlePath}"
-                \`;
-                const child = (0, child_process_1.spawn)('sh', ['-c', script], {
-                    detached: true,
-                    stdio: 'ignore',
-                });
-                child.unref();
-                electron_1.app.quit();
-                return;
-            }
+        try {
+            const { patchUpdaterContent } = require('./scripts/patch_updater');
+            const updaterContent = patchUpdaterContent(fs.readFileSync(updaterPath, 'utf8'), USE_TW);
+            fs.copyFileSync(path.join(__dirname, 'scripts', 'mac_update_fallback.js'), path.join(tempDir, 'dist', 'mac_update_fallback.js'));
+            fs.writeFileSync(updaterPath, updaterContent, 'utf8');
+            console.log('[修改] 更新弹窗汉化与安全更新补丁注入成功！');
+        } catch (err) {
+            console.error('[错误] 更新代码不兼容，已停止注入: ' + err.message);
+            // A previous step may have restored the official archive. Restore
+            // the exact original bytes so the current signature stays valid.
+            fs.writeFileSync(asarPath, asarBeforeInstall);
+            fs.rmSync(tempDir, { recursive: true, force: true });
+            return false;
         }
-        return origQuitAndInstall(...args);
-    };`;
-        updaterContent = updaterContent.replace(targetAutoInstall, replacementAutoInstall);
-
-        const targetDownloadedAndError = `    electron_updater_1.autoUpdater.on('update-downloaded', (info) => {
-        console.log(\`[AutoUpdater] Update downloaded: \${info.version}\`);
-        if (isHeadless) {
-            // Proceed to auto install in headless mode
-            if (electron_1.app.isPackaged) {
-                if (process.platform === 'linux') {
-                    const downloadedFilePath = info.downloadedFile;
-                    headlessQuitAndInstall(downloadedFilePath);
-                }
-                else {
-                    electron_updater_1.autoUpdater.quitAndInstall();
-                }
-            }
-            else {
-                console.log('[AutoUpdater] Headless mode: Skipping quitAndInstall (not packaged).');
-            }
-            return;
-        }
-        broadcastState({
-            type: types_1.UpdateState.Ready,
-            update: { version: info.version },
-        });
-        updateMenuState(MenuUpdateStep.RestartToUpdate);
-    });
-    electron_updater_1.autoUpdater.on('error', (err) => {
-        console.error('[AutoUpdater] Error:', err.message);
-        broadcastState({ type: types_1.UpdateState.Idle });
-        updateMenuState(MenuUpdateStep.CheckForUpdates);
-        isManualCheck = false;
-    });`;
-        const replacementDownloadedAndError = `    electron_updater_1.autoUpdater.on('update-downloaded', (info) => {
-        console.log(\`[AutoUpdater] Update downloaded: \${info.version}\`);
-        macDownloadedInfo = info;
-        if (isHeadless) {
-            // Proceed to auto install in headless mode
-            if (electron_1.app.isPackaged) {
-                if (process.platform === 'linux') {
-                    const downloadedFilePath = info.downloadedFile;
-                    headlessQuitAndInstall(downloadedFilePath);
-                }
-                else {
-                    electron_updater_1.autoUpdater.quitAndInstall();
-                }
-            }
-            else {
-                console.log('[AutoUpdater] Headless mode: Skipping quitAndInstall (not packaged).');
-            }
-            return;
-        }
-        broadcastState({
-            type: types_1.UpdateState.Ready,
-            update: { version: info.version },
-        });
-        updateMenuState(MenuUpdateStep.RestartToUpdate);
-    });
-    electron_updater_1.autoUpdater.on('error', (err) => {
-        console.error('[AutoUpdater] Error:', err.message);
-        if (process.platform === 'darwin' && macDownloadedInfo && /Code signature|did not pass validation|代码未能满足/i.test(String((err && err.message) || err))) {
-            console.log(\`[AutoUpdater] Bypassed Squirrel.Mac signature validation error on ad-hoc build; keeping Ready state (\${macDownloadedInfo.version})\`);
-            broadcastState({
-                type: types_1.UpdateState.Ready,
-                update: { version: macDownloadedInfo.version },
-            });
-            updateMenuState(MenuUpdateStep.RestartToUpdate);
-            isManualCheck = false;
-            return;
-        }
-        broadcastState({ type: types_1.UpdateState.Idle });
-        updateMenuState(MenuUpdateStep.CheckForUpdates);
-        isManualCheck = false;
-    });`;
-        updaterContent = updaterContent.replace(targetDownloadedAndError, replacementDownloadedAndError);
-
-        fs.writeFileSync(updaterPath, updaterContent, 'utf-8');
-        console.log(`[修改] 更新弹窗汉化与 macOS 更新修复注入成功！`);
     }
 
     // 4. 重新打包
@@ -1920,4 +1684,6 @@ function main() {
     }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { cleanJsContent, AUTO_RETRY_CODE, install20 };
